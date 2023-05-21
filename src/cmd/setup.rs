@@ -204,24 +204,83 @@ fn run_dut(args: &ArgsDut) -> Result<()> {
 #[argh(subcommand, name = "env")]
 pub struct ArgsEnv {}
 fn run_env(_args: &ArgsEnv) -> Result<()> {
-    eprintln!("Checking the environment...");
-    let print_err_and_ignore = |e: Error| -> Result<()> {
-        eprintln!("FAIL: {}", e);
+    eprintln!("Checking the environment prerequisites...");
+    eprintln!("For more details, please check:");
+    eprintln!("https://chromium.googlesource.com/chromiumos/docs/+/main/developer_guide.md");
+    let mut ok = true;
+    let mut print_err_and_ignore = |e: Error| -> Result<()> {
+        ok = false;
+        eprintln!("{}", e);
         Ok(())
     };
-    check_gsutil().or_else(print_err_and_ignore)?;
+    check_env_prerequisites().or_else(&mut print_err_and_ignore)?;
+    check_gsutil().or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("git").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("gitk").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("git-gui").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("curl").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("xz-utils").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("python3-pkg-resources").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("python3-virtualenv").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("python3-oauth2client").or_else(&mut print_err_and_ignore)?;
+    check_apt_installed("socat").or_else(&mut print_err_and_ignore)?;
+    eprintln!("----");
+    if ok {
+        eprintln!("You're ready to build ChromiumOS. Enjoy!!");
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Your machine seems not to be ready for building ChromiumOS (;_;)\nPlease fix the issues and try again!"
+        ))
+    }
+}
+
+fn run_check_script(expectation: &str, check_cmd: &str, fix: &str) -> Result<()> {
+    eprintln!("----");
+    eprintln!("Running `{check_cmd}`...");
+    let result = run_bash_command(check_cmd, None)?;
+    let stdout = get_stdout(&result);
+    eprintln!("{}", stdout);
+    result.status.exit_ok().context(anyhow!(
+        "NG: Expectation not satisfied: {expectation}\n{fix}"
+    ))?;
+    eprintln!("OK: {expectation}");
     Ok(())
 }
 
+fn check_env_prerequisites() -> Result<()> {
+    run_check_script(
+        "OS arch is x86_64",
+        "uname -m | grep -E '^x86_64$'",
+        "Please use a different machine that is based on x86_64 architecture",
+    )
+}
+
 fn check_gsutil() -> Result<()> {
-    let result = run_bash_command("which gsutil", None)?;
-    result
-        .status
-        .exit_ok()
-        .context(anyhow!("Failed to run `which gsutil`"))?;
-    let result = get_stdout(&result);
-    eprintln!("{}", result);
-    Ok(())
+    run_check_script(
+        "gsutil command is available",
+        "which gsutil",
+        "Please install google-cloud-sdk:
+
+# Step 1: Install snap
+# https://snapcraft.io/docs/installing-snap-on-ubuntu
+sudo apt update
+sudo apt install snapd
+
+# Step 2: Install google-cloud-cli via snap
+# https://cloud.google.com/sdk/docs/downloads-snap
+snap remove google-cloud-sdk
+snap install google-cloud-cli --classic
+        ",
+    )
+}
+
+fn check_apt_installed(package_name: &str) -> Result<()> {
+    run_check_script(
+        &format!("apt package {package_name} is installed"),
+        &format!("sudo apt list --installed {package_name} 2>/dev/null | grep {package_name}"),
+        &format!("sudo apt install -y {package_name}"),
+    )
 }
 
 #[derive(FromArgs, PartialEq, Debug)]
